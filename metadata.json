@@ -1,0 +1,6 @@
+{
+  "name": "Suite de Gestión Académica y Administrativa — IUTIRLA Extensión Puerto Ordaz",
+  "description": "Plataforma integral para la Dirección y Coordinación Académica del IUTIRLA Extensión Puerto Ordaz (Ciudad Guayana, Estado Bolívar): documentos oficiales, carga horaria con detección de cruces, cartelera trimestral, trámites estudiantiles y asistente directivo con Gemini.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

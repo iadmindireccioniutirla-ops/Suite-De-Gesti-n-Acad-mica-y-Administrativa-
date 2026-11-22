@@ -1,0 +1,9 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+public/assets/aistudio/Informe_IA_-_Direcci_n_y_Administraci_n_-_Leonardo_Salazar_62db0d8d.pdf
