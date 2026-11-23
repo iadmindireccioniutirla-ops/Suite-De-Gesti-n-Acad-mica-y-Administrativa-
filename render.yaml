@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: suite-gestion-iutirla-puerto-ordaz
+    runtime: node
+    plan: free
+    region: virginia
+    buildCommand: npm install --include=dev && npm run lint && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_VERSION
+        value: 24.19.0
+      - key: NODE_ENV
+        value: production

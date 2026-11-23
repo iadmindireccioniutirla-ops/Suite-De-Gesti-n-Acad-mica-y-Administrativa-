@@ -47,6 +47,28 @@ npm start
 `dist`. Ejecuta primero `npm run build`. El puerto predeterminado es `3000` y
 se puede cambiar con `PORT`.
 
+## Despliegue público en Render
+
+El archivo `render.yaml` configura un servicio web en Virginia con despliegue
+automático desde `main`. Para publicarlo:
+
+1. Inicia sesión o crea una cuenta en [Render](https://dashboard.render.com/).
+2. Selecciona **New > Blueprint** y conecta el repositorio de GitHub
+   `iadmindireccioniutirla-ops/Suite-De-Gesti-n-Acad-mica-y-Administrativa-`.
+3. Confirma la configuración del Blueprint y crea el servicio. Render compilará
+   la aplicación y mostrará la URL pública cuando el primer despliegue termine.
+
+La configuración usa el plan gratuito, pensado para pruebas y demostraciones,
+no para operación institucional: Render suspende el servicio tras 15 minutos sin
+tráfico y el siguiente acceso puede tardar alrededor de un minuto. Además, el
+sistema de archivos del servicio no es persistente. Los datos actuales de la
+suite se guardan en el navegador de cada usuario, no en Render.
+
+El asistente de Gemini queda deshabilitado si no se configura
+`GEMINI_API_KEY`. No agregues esa clave hasta contar con controles contra el uso
+no autorizado del endpoint público; la clave debe guardarse como secreto en
+Render, nunca en GitHub ni en variables `VITE_*`.
+
 ## Datos y privacidad
 
 Los horarios, avisos, hitos del calendario y el borrador de documento se guardan
