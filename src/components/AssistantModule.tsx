@@ -420,6 +420,14 @@ export function AssistantModule({
         )}
       </div>
 
+      <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-950">
+        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+        <p>
+          No incluya nombres, cédulas, calificaciones, expedientes ni otros datos personales o
+          confidenciales. Las consultas se envían a Google Gemini para generar respuestas.
+        </p>
+      </div>
+
       {/* Menú Numérico Operativo 1 al 4 */}
       <section aria-label="Menú operativo rápido del asistente">
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">

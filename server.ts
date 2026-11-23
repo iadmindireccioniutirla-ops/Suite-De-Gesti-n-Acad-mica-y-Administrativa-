@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import type { Request, Response } from 'express';
+import { rateLimit } from 'express-rate-limit';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +37,16 @@ REGLAS ESTRICTAS DE OPERACIÓN (OBLIGATORIAS):
      DESTINATARIO: [Destinatario o dependencia]
      Luego presenta el cuerpo completo redactado formalmente y el bloque de firma con marcadores si no se indicaron autoridades.`;
 
+const assistantChatLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: {
+    error: 'Se alcanzó el límite de consultas al asistente. Intente nuevamente en 15 minutos.',
+  },
+});
+
 interface ChatMessageInput {
   role: 'user' | 'model';
   text: string;
@@ -68,13 +79,14 @@ async function startServer() {
   const isProduction =
     process.env.NODE_ENV === 'production' || process.env.npm_lifecycle_event === 'start';
 
+  app.set('trust proxy', 1);
   app.use(express.json({ limit: '1mb' }));
 
   app.get('/api/health', (_req: Request, res: Response) => {
     res.json({ ok: true, service: 'iutirla-suite-api' });
   });
 
-  app.post('/api/assistant/chat', async (req: Request, res: Response) => {
+  app.post('/api/assistant/chat', assistantChatLimiter, async (req: Request, res: Response) => {
     try {
       const body = (req.body ?? {}) as ChatRequestBody;
       const rawMessage = typeof body.message === 'string' ? body.message.trim() : '';

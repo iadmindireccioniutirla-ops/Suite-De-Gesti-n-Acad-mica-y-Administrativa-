@@ -66,8 +66,12 @@ suite se guardan en el navegador de cada usuario, no en Render.
 
 El asistente de Gemini queda deshabilitado si no se configura
 `GEMINI_API_KEY`. No agregues esa clave hasta contar con controles contra el uso
-no autorizado del endpoint público; la clave debe guardarse como secreto en
-Render, nunca en GitHub ni en variables `VITE_*`.
+no autorizado del endpoint público. El servidor limita cada dirección IP a 10
+consultas cada 15 minutos; este límite reduce el abuso, pero no sustituye un
+sistema de autenticación ni una cuota de gasto configurada en Google AI Studio.
+La clave debe guardarse como secreto en Render, nunca en GitHub ni en variables
+`VITE_*`. No envíes al asistente nombres, cédulas, calificaciones, expedientes ni
+otros datos personales o confidenciales.
 
 ## Datos y privacidad
 
