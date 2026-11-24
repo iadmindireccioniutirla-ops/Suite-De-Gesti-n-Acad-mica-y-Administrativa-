@@ -295,6 +295,7 @@ export function AssistantModule({
 }: AssistantModuleProps) {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isSlowRequest, setIsSlowRequest] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
 
@@ -322,23 +323,48 @@ export function AssistantModule({
     onUpdateMessages(nextHistory);
     setInput('');
     setIsLoading(true);
+    setIsSlowRequest(false);
+    const slowRequestTimer = window.setTimeout(() => setIsSlowRequest(true), 12000);
 
     try {
       const historyPayload = messages
         .filter((m) => !m.error)
         .map((m) => ({ role: m.role, text: m.text }));
 
-      const res = await fetch('/api/assistant/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: trimmed,
-          history: historyPayload,
-          workspaceContext,
-        }),
+      const requestBody = JSON.stringify({
+        message: trimmed,
+        history: historyPayload,
+        workspaceContext,
       });
+      const sendRequest = () =>
+        fetch('/api/assistant/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: requestBody,
+        });
 
-      const data = (await res.json()) as { reply?: string; error?: string };
+      let res = await sendRequest();
+      const responseText = await res.text();
+      let data: { reply?: string; error?: string };
+      try {
+        data = JSON.parse(responseText) as { reply?: string; error?: string };
+      } catch {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 2000));
+        res = await sendRequest();
+        try {
+          data = JSON.parse(await res.text()) as { reply?: string; error?: string };
+        } catch {
+          const errMsg: ChatMessage = {
+            id: `msg-${Date.now()}-err`,
+            role: 'model',
+            text: 'Render está iniciando el servicio y devolvió una pantalla temporal. Espere hasta un minuto y vuelva a enviar la consulta.',
+            timestamp: nowLabel,
+            error: true,
+          };
+          onUpdateMessages([...nextHistory, errMsg]);
+          return;
+        }
+      }
 
       if (!res.ok || !data.reply) {
         const errMsg: ChatMessage = {
@@ -365,12 +391,14 @@ export function AssistantModule({
       const errMsg: ChatMessage = {
         id: `msg-${Date.now()}-net`,
         role: 'model',
-        text: 'Error de conexión con el servidor de la aplicación. Verifique que el servicio esté activo e intente nuevamente.',
+        text: 'No se pudo conectar con el servidor. En el plan gratuito de Render puede tardar hasta un minuto en despertar; espere y vuelva a enviar la consulta.',
         timestamp: nowLabel,
         error: true,
       };
       onUpdateMessages([...nextHistory, errMsg]);
     } finally {
+      window.clearTimeout(slowRequestTimer);
+      setIsSlowRequest(false);
       setIsLoading(false);
     }
   };
@@ -560,7 +588,11 @@ export function AssistantModule({
             <div className="flex items-start">
               <div className="bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 flex items-center gap-2.5 text-xs text-slate-600">
                 <Loader2 className="w-4 h-4 animate-spin text-[#8B0000]" />
-                <span>Redactando respuesta conforme al protocolo institucional...</span>
+                <span>
+                  {isSlowRequest
+                    ? 'El servicio gratuito de Render puede estar despertando. La primera respuesta puede tardar hasta un minuto...'
+                    : 'Redactando respuesta conforme al protocolo institucional...'}
+                </span>
               </div>
             </div>
           )}

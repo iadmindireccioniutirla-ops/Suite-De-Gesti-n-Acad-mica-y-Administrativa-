@@ -63,6 +63,9 @@ no para operación institucional: Render suspende el servicio tras 15 minutos si
 tráfico y el siguiente acceso puede tardar alrededor de un minuto. Además, el
 sistema de archivos del servicio no es persistente. Los datos actuales de la
 suite se guardan en el navegador de cada usuario, no en Render.
+Durante ese inicio puede aparecer una pantalla temporal de Render en lugar de
+la suite; espera a que termine y vuelve a enviar la consulta si el chat no pudo
+conectarse.
 
 El asistente de Gemini queda deshabilitado si no se configura
 `GEMINI_API_KEY`. No agregues esa clave hasta contar con controles contra el uso
