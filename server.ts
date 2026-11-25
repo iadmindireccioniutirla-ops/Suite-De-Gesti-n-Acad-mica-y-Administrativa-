@@ -134,14 +134,44 @@ async function startServer() {
         ? `${conversationHistory}\n\nUsuario: ${currentRequest}`
         : currentRequest;
 
-      const response = await ai.interactions.create({
-        model: 'gemini-4-hydrogen',
-        input,
-        system_instruction: SYSTEM_INSTRUCTION,
-        store: false,
-      });
+      let generatedText: string | undefined;
+      try {
+        const response = await ai.interactions.create({
+          model: 'gemini-4-hydrogen',
+          input,
+          system_instruction: SYSTEM_INSTRUCTION,
+          store: false,
+        });
+        generatedText = response.output_text;
+      } catch (err: unknown) {
+        if (!(err instanceof ApiError) || ![400, 404, 405].includes(err.status)) {
+          throw err;
+        }
 
-      const replyText = response.output_text?.trim();
+        console.warn(
+          `[assistant/chat] Interactions API returned ${err.status}; retrying with generateContent.`,
+        );
+        const contents = [
+          ...sanitizedHistory.map((item) => ({
+            role: item.role,
+            parts: [{ text: item.text }],
+          })),
+          {
+            role: 'user' as const,
+            parts: [{ text: currentRequest }],
+          },
+        ];
+        const fallbackResponse = await ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents,
+          config: {
+            systemInstruction: SYSTEM_INSTRUCTION,
+          },
+        });
+        generatedText = fallbackResponse.text;
+      }
+
+      const replyText = generatedText?.trim();
       if (!replyText) {
         res.status(502).json({
           error: 'El servicio de Gemini no devolvió contenido textual en esta respuesta.',

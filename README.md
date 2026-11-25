@@ -75,9 +75,11 @@ sistema de autenticación ni una cuota de gasto configurada en Google AI Studio.
 La clave debe guardarse como secreto en Render, nunca en GitHub ni en variables
 `VITE_*`. No envíes al asistente nombres, cédulas, calificaciones, expedientes ni
 otros datos personales o confidenciales.
-El asistente usa la Interactions API oficial de Google GenAI con `store=false`;
-la conversación se envía a Google para generar la respuesta, pero no se guarda
-como una interacción recuperable por la API.
+El asistente usa primero la Interactions API oficial de Google GenAI con
+`store=false` y recurre a `generateContent` si el proyecto o modelo no admite
+esa operación. En ambos casos la conversación se envía a Google para generar la
+respuesta; `store=false` evita guardar la interacción para recuperarla mediante
+la API.
 
 ## Datos y privacidad
 
