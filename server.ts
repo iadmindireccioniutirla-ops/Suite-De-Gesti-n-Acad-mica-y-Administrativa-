@@ -37,6 +37,9 @@ REGLAS ESTRICTAS DE OPERACIÓN (OBLIGATORIAS):
      DESTINATARIO: [Destinatario o dependencia]
      Luego presenta el cuerpo completo redactado formalmente y el bloque de firma con marcadores si no se indicaron autoridades.`;
 
+const PRIMARY_GEMINI_MODEL = 'gemini-4-hydrogen';
+const FALLBACK_GEMINI_MODEL = 'gemini-3.8-flash';
+
 const assistantChatLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 10,
@@ -134,41 +137,57 @@ async function startServer() {
         ? `${conversationHistory}\n\nUsuario: ${currentRequest}`
         : currentRequest;
 
+      const contents = [
+        ...sanitizedHistory.map((item) => ({
+          role: item.role,
+          parts: [{ text: item.text }],
+        })),
+        {
+          role: 'user' as const,
+          parts: [{ text: currentRequest }],
+        },
+      ];
+
+      const generateWithModel = async (model: string): Promise<string | undefined> => {
+        try {
+          const response = await ai.interactions.create({
+            model,
+            input,
+            system_instruction: SYSTEM_INSTRUCTION,
+            store: false,
+          });
+          return response.output_text;
+        } catch (err: unknown) {
+          if (!(err instanceof ApiError) || ![400, 404, 405].includes(err.status)) {
+            throw err;
+          }
+
+          console.warn(
+            `[assistant/chat] Interactions API returned ${err.status}; retrying ${model} with generateContent.`,
+          );
+          const fallbackResponse = await ai.models.generateContent({
+            model,
+            contents,
+            config: {
+              systemInstruction: SYSTEM_INSTRUCTION,
+            },
+          });
+          return fallbackResponse.text;
+        }
+      };
+
       let generatedText: string | undefined;
       try {
-        const response = await ai.interactions.create({
-          model: 'gemini-4-hydrogen',
-          input,
-          system_instruction: SYSTEM_INSTRUCTION,
-          store: false,
-        });
-        generatedText = response.output_text;
+        generatedText = await generateWithModel(PRIMARY_GEMINI_MODEL);
       } catch (err: unknown) {
-        if (!(err instanceof ApiError) || ![400, 404, 405].includes(err.status)) {
+        if (!(err instanceof ApiError) || err.status !== 503) {
           throw err;
         }
 
         console.warn(
-          `[assistant/chat] Interactions API returned ${err.status}; retrying with generateContent.`,
+          `[assistant/chat] ${PRIMARY_GEMINI_MODEL} is unavailable; retrying with ${FALLBACK_GEMINI_MODEL}.`,
         );
-        const contents = [
-          ...sanitizedHistory.map((item) => ({
-            role: item.role,
-            parts: [{ text: item.text }],
-          })),
-          {
-            role: 'user' as const,
-            parts: [{ text: currentRequest }],
-          },
-        ];
-        const fallbackResponse = await ai.models.generateContent({
-          model: 'gemini-4-hydrogen',
-          contents,
-          config: {
-            systemInstruction: SYSTEM_INSTRUCTION,
-          },
-        });
-        generatedText = fallbackResponse.text;
+        generatedText = await generateWithModel(FALLBACK_GEMINI_MODEL);
       }
 
       const replyText = generatedText?.trim();
@@ -212,7 +231,7 @@ async function startServer() {
         console.error(`[assistant/chat] Gemini API ${status}:`, errorMessage);
         res.status(503).json({
           error:
-            'El servicio de Gemini está temporalmente indisponible. Espere unos instantes e intente nuevamente.',
+            'Los modelos de Gemini están temporalmente saturados. Espere unos instantes e intente nuevamente.',
         });
         return;
       }

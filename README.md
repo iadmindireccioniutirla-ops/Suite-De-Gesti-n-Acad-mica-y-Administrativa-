@@ -76,10 +76,11 @@ La clave debe guardarse como secreto en Render, nunca en GitHub ni en variables
 `VITE_*`. No envíes al asistente nombres, cédulas, calificaciones, expedientes ni
 otros datos personales o confidenciales.
 El asistente usa primero la Interactions API oficial de Google GenAI con
-`store=false` y recurre a `generateContent` si el proyecto o modelo no admite
-esa operación. En ambos casos la conversación se envía a Google para generar la
-respuesta; `store=false` evita guardar la interacción para recuperarla mediante
-la API.
+`store=false`, recurre a `generateContent` si el proyecto o modelo no admite esa
+operación y, ante una indisponibilidad 503 de Gemini 4 Hydrogen, intenta con el
+modelo estable Gemini 3.8 Flash. En ambos casos la conversación se envía a
+Google para generar la respuesta; `store=false` evita guardar la interacción
+para recuperarla mediante la API.
 
 ## Datos y privacidad
 
