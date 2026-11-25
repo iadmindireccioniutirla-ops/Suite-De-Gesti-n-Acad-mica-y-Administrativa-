@@ -1,7 +1,8 @@
 import 'dotenv/config';
 import express from 'express';
-import type { Request, Response } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,6 +40,8 @@ REGLAS ESTRICTAS DE OPERACIÓN (OBLIGATORIAS):
 
 const PRIMARY_GEMINI_MODEL = 'gemini-4-hydrogen';
 const FALLBACK_GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash-lite'] as const;
+const AUTH_COOKIE_NAME = 'iutirla_session';
+const SESSION_DURATION_SECONDS = 12 * 60 * 60;
 
 const assistantChatLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -47,6 +50,17 @@ const assistantChatLimiter = rateLimit({
   legacyHeaders: false,
   message: {
     error: 'Se alcanzó el límite de consultas al asistente. Intente nuevamente en 15 minutos.',
+  },
+});
+
+const authLoginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  message: {
+    error: 'Se excedieron los intentos de inicio de sesión. Intente nuevamente en 15 minutos.',
   },
 });
 
@@ -59,6 +73,100 @@ interface ChatRequestBody {
   message?: unknown;
   history?: unknown;
   workspaceContext?: unknown;
+}
+
+interface LoginRequestBody {
+  email?: unknown;
+  password?: unknown;
+}
+
+interface AuthConfiguration {
+  email: string;
+  password: string;
+  sessionSecret: string;
+}
+
+interface AuthSession {
+  email: string;
+  expiresAt: number;
+}
+
+function getAuthConfiguration(): AuthConfiguration | null {
+  const email = process.env.ADMIN_EMAIL?.trim();
+  const password = process.env.ADMIN_PASSWORD;
+  const sessionSecret = process.env.AUTH_SESSION_SECRET;
+  if (!email || !password || !sessionSecret || sessionSecret.length < 32) {
+    return null;
+  }
+  return { email, password, sessionSecret };
+}
+
+function safeStringEqual(left: string, right: string): boolean {
+  const leftHash = createHash('sha256').update(left).digest();
+  const rightHash = createHash('sha256').update(right).digest();
+  return timingSafeEqual(leftHash, rightHash);
+}
+
+function createSessionToken(email: string, sessionSecret: string): AuthSession & { token: string } {
+  const expiresAt = Date.now() + SESSION_DURATION_SECONDS * 1000;
+  const payload = Buffer.from(JSON.stringify({ email, expiresAt })).toString('base64url');
+  const signature = createHmac('sha256', sessionSecret).update(payload).digest('base64url');
+  return { email, expiresAt, token: `${payload}.${signature}` };
+}
+
+function readAuthSession(
+  req: Request,
+  authConfig: Pick<AuthConfiguration, 'email' | 'sessionSecret'>,
+): AuthSession | null {
+  const cookie = req
+    .get('cookie')
+    ?.split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${AUTH_COOKIE_NAME}=`))
+    ?.slice(AUTH_COOKIE_NAME.length + 1);
+  if (!cookie) return null;
+
+  const [payload, signature] = cookie.split('.');
+  if (!payload || !signature) return null;
+  const expectedSignature = createHmac('sha256', authConfig.sessionSecret).update(payload).digest();
+  const receivedSignature = Buffer.from(signature, 'base64url');
+  if (
+    receivedSignature.length !== expectedSignature.length ||
+    !timingSafeEqual(receivedSignature, expectedSignature)
+  ) {
+    return null;
+  }
+
+  try {
+    const session = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as AuthSession;
+    if (
+      typeof session.email !== 'string' ||
+      typeof session.expiresAt !== 'number' ||
+      session.expiresAt <= Date.now() ||
+      session.email.toLowerCase() !== authConfig.email.toLowerCase()
+    ) {
+      return null;
+    }
+    return session;
+  } catch {
+    return null;
+  }
+}
+
+function setAuthCookie(res: Response, token: string, isProduction: boolean): void {
+  const secure = isProduction ? '; Secure' : '';
+  res.setHeader(
+    'Set-Cookie',
+    `${AUTH_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_DURATION_SECONDS}${secure}`,
+  );
+}
+
+function clearAuthCookie(res: Response, isProduction: boolean): void {
+  const secure = isProduction ? '; Secure' : '';
+  res.setHeader(
+    'Set-Cookie',
+    `${AUTH_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure}`,
+  );
 }
 
 function getGeminiClient(): GoogleGenAI {
@@ -117,7 +225,69 @@ async function startServer() {
     res.json({ ok: true, service: 'iutirla-suite-api' });
   });
 
-  app.post('/api/assistant/chat', assistantChatLimiter, async (req: Request, res: Response) => {
+  app.get('/api/auth/session', (req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const authConfig = getAuthConfiguration();
+    if (!authConfig) {
+      res.status(503).json({ error: 'El acceso institucional aún no está configurado en el servidor.' });
+      return;
+    }
+
+    const session = readAuthSession(req, authConfig);
+    if (!session) {
+      res.status(401).json({ authenticated: false });
+      return;
+    }
+    res.json({ authenticated: true, email: session.email, expiresAt: session.expiresAt });
+  });
+
+  app.post('/api/auth/login', authLoginLimiter, (req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const authConfig = getAuthConfiguration();
+    if (!authConfig) {
+      res.status(503).json({ error: 'El acceso institucional aún no está configurado en el servidor.' });
+      return;
+    }
+
+    const body = (req.body ?? {}) as LoginRequestBody;
+    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const password = typeof body.password === 'string' ? body.password : '';
+    const validEmail = email === authConfig.email.toLowerCase();
+    const validPassword = safeStringEqual(password, authConfig.password);
+    if (!validEmail || !validPassword) {
+      res.status(401).json({ error: 'Correo o contraseña incorrectos.' });
+      return;
+    }
+
+    const session = createSessionToken(authConfig.email, authConfig.sessionSecret);
+    setAuthCookie(res, session.token, isProduction);
+    res.json({
+      authenticated: true,
+      email: session.email,
+      expiresAt: session.expiresAt,
+    });
+  });
+
+  app.post('/api/auth/logout', (_req: Request, res: Response) => {
+    clearAuthCookie(res, isProduction);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ ok: true });
+  });
+
+  const requireAuth = (req: Request, res: Response, next: NextFunction) => {
+    const authConfig = getAuthConfiguration();
+    if (!authConfig) {
+      res.status(503).json({ error: 'El acceso institucional aún no está configurado en el servidor.' });
+      return;
+    }
+    if (!readAuthSession(req, authConfig)) {
+      res.status(401).json({ error: 'Inicie sesión para continuar.' });
+      return;
+    }
+    next();
+  };
+
+  app.post('/api/assistant/chat', requireAuth, assistantChatLimiter, async (req: Request, res: Response) => {
     try {
       const body = (req.body ?? {}) as ChatRequestBody;
       const rawMessage = typeof body.message === 'string' ? body.message.trim() : '';

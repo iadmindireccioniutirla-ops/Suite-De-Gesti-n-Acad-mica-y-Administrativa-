@@ -4,6 +4,7 @@ import {
   Clock,
   FileText,
   LayoutDashboard,
+  LogOut,
   Menu,
   RotateCcw,
   Sparkles,
@@ -14,6 +15,7 @@ import { BulletinProceduresModule } from './components/BulletinProceduresModule'
 import { DashboardModule } from './components/DashboardModule';
 import { DocumentsModule } from './components/DocumentsModule';
 import { InstitutionalLogo } from './components/InstitutionalMedia';
+import { LoginScreen } from './components/LoginScreen';
 import { SchedulesModule } from './components/SchedulesModule';
 import {
   DEFAULT_QUARTER,
@@ -57,6 +59,13 @@ const DEFAULT_DRAFT: OfficialDocumentDraft = {
   cityAndDate: 'Puerto Ordaz, Estado Bolívar, [FECHA]',
 };
 
+interface AuthSessionResponse {
+  authenticated?: boolean;
+  email?: string;
+  expiresAt?: number;
+  error?: string;
+}
+
 const NAV_ITEMS: Array<{
   id: ModuleId;
   label: string;
@@ -70,6 +79,13 @@ const NAV_ITEMS: Array<{
 ];
 
 export default function App() {
+  const [authStatus, setAuthStatus] = useState<'checking' | 'authenticated' | 'logged-out'>(
+    'checking',
+  );
+  const [authEmail, setAuthEmail] = useState('');
+  const [authExpiresAt, setAuthExpiresAt] = useState(0);
+  const [loginMessage, setLoginMessage] = useState<string | null>(null);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
   const [activeModule, setActiveModule] = useState<ModuleId>('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -89,6 +105,59 @@ export default function App() {
   const [scheduleSpecialtyFilter, setScheduleSpecialtyFilter] = useState<
     Specialty | 'Todas'
   >('Todas');
+
+  useEffect(() => {
+    let active = true;
+    const verifySession = async () => {
+      try {
+        const response = await fetch('/api/auth/session', {
+          credentials: 'same-origin',
+          cache: 'no-store',
+        });
+        if (!active) return;
+        if (response.status === 401) {
+          setAuthStatus('logged-out');
+          return;
+        }
+
+        const data = (await response.json()) as AuthSessionResponse;
+        if (!response.ok || !data.authenticated || !data.email || !data.expiresAt) {
+          throw new Error(data.error || 'No se pudo verificar el acceso institucional.');
+        }
+
+        setAuthEmail(data.email);
+        setAuthExpiresAt(data.expiresAt);
+        setAuthStatus('authenticated');
+        setLoginMessage(null);
+      } catch (error: unknown) {
+        if (!active) return;
+        setLoginMessage(
+          error instanceof Error
+            ? error.message
+            : 'No se pudo verificar el acceso institucional.',
+        );
+        setAuthStatus('logged-out');
+      }
+    };
+
+    void verifySession();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated' || !authExpiresAt) return;
+    const expiresIn = Math.max(0, authExpiresAt - Date.now());
+    const timeout = window.setTimeout(() => {
+      setChatMessages([]);
+      setAuthEmail('');
+      setAuthExpiresAt(0);
+      setLoginMessage('La sesión venció. Inicie sesión nuevamente.');
+      setAuthStatus('logged-out');
+    }, expiresIn);
+    return () => window.clearTimeout(timeout);
+  }, [authStatus, authExpiresAt]);
 
   useEffect(() => {
     try {
@@ -221,8 +290,56 @@ Los interesados deberán consignar su expediente completo ante las oficinas corr
     setDocDraft(DEFAULT_DRAFT);
   };
 
+  const handleAuthenticated = (email: string, expiresAt: number) => {
+    setAuthEmail(email);
+    setAuthExpiresAt(expiresAt);
+    setLoginMessage(null);
+    setLogoutError(null);
+    setAuthStatus('authenticated');
+  };
+
+  const handleLogout = async () => {
+    setLogoutError(null);
+    try {
+      const response = await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+      });
+      if (!response.ok) {
+        throw new Error('El servidor no pudo cerrar la sesión.');
+      }
+      setChatMessages([]);
+      setAuthEmail('');
+      setAuthExpiresAt(0);
+      setLoginMessage(null);
+      setAuthStatus('logged-out');
+    } catch (error: unknown) {
+      setLogoutError(
+        error instanceof Error ? error.message : 'No se pudo cerrar la sesión.',
+      );
+    }
+  };
+
   const currentNavLabel =
     NAV_ITEMS.find((item) => item.id === activeModule)?.label ?? 'Panel Principal';
+
+  if (authStatus === 'checking') {
+    return (
+      <main className="min-h-screen flex items-center justify-center bg-slate-100 text-sm text-slate-600">
+        Verificando acceso institucional...
+      </main>
+    );
+  }
+
+  if (authStatus !== 'authenticated') {
+    return (
+      <LoginScreen
+        initialError={loginMessage}
+        onAuthenticated={handleAuthenticated}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex">
@@ -352,6 +469,18 @@ Los interesados deberán consignar su expediente completo ante las oficinas corr
             <span className="hidden md:inline text-xs font-mono text-slate-500 whitespace-nowrap">
               {DEFAULT_QUARTER}
             </span>
+            <span className="hidden xl:inline max-w-56 truncate text-xs text-slate-500">
+              {authEmail}
+            </span>
+            <button
+              type="button"
+              onClick={() => void handleLogout()}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
+              aria-label="Cerrar sesión"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Salir</span>
+            </button>
             {activeModule !== 'assistant' && (
               <button
                 type="button"
@@ -364,6 +493,11 @@ Los interesados deberán consignar su expediente completo ante las oficinas corr
             )}
           </div>
         </header>
+        {logoutError && (
+          <div role="alert" className="no-print bg-red-50 px-4 py-2 text-center text-xs text-red-800">
+            {logoutError}
+          </div>
+        )}
 
         {/* Contenido Activo */}
         <main className="flex-1 px-4 sm:px-6 lg:px-8 py-6 sm:py-8 max-w-[1320px] w-full mx-auto">

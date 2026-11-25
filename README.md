@@ -69,12 +69,12 @@ conectarse.
 
 El asistente de Gemini queda deshabilitado si no se configura
 `GEMINI_API_KEY`. No agregues esa clave hasta contar con controles contra el uso
-no autorizado del endpoint público. El servidor limita cada dirección IP a 10
-consultas cada 15 minutos; este límite reduce el abuso, pero no sustituye un
-sistema de autenticación ni una cuota de gasto configurada en Google AI Studio.
-La clave debe guardarse como secreto en Render, nunca en GitHub ni en variables
-`VITE_*`. No envíes al asistente nombres, cédulas, calificaciones, expedientes ni
-otros datos personales o confidenciales.
+no autorizado del endpoint. El asistente requiere una sesión institucional y
+además limita cada dirección IP a 10 consultas cada 15 minutos; esto no
+sustituye una cuota de gasto configurada en Google AI Studio. La clave debe
+guardarse como secreto en Render, nunca en GitHub ni en variables `VITE_*`. No
+envíes al asistente nombres, cédulas, calificaciones, expedientes ni otros datos
+personales o confidenciales.
 El asistente usa primero la Interactions API oficial de Google GenAI con
 `store=false`, recurre a `generateContent` si el proyecto o modelo no admite esa
 operación y, ante una indisponibilidad 503, prueba Gemini 3.8 Flash y luego
@@ -97,3 +97,19 @@ antes de emitir comunicaciones oficiales.
 La clave `GEMINI_API_KEY` se configura únicamente en el entorno del servidor.
 No la incluyas en el código fuente ni en variables `VITE_*`, que pueden quedar
 expuestas en el navegador.
+
+## Inicio de sesión institucional
+
+La suite requiere una sesión para mostrar sus módulos y el servidor también
+protege el endpoint del asistente. En Render, configura estas variables en
+**Environment**:
+
+- `ADMIN_EMAIL`: `iadmindireccioniutirla@gmail.com`
+- `ADMIN_PASSWORD`: una contraseña nueva y exclusiva, guardada como secreto
+- `AUTH_SESSION_SECRET`: genera un valor aleatorio de al menos 32 caracteres y
+  guárdalo como secreto
+
+No reutilices contraseñas que hayas compartido en chats ni las incluyas en
+GitHub. La sesión vence a las 12 horas. Los datos de la suite siguen guardándose
+localmente en el navegador; el inicio de sesión no cifra esos datos ni protege
+el equipo compartido de otros usuarios con acceso al mismo perfil del navegador.
