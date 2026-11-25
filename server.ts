@@ -38,7 +38,7 @@ REGLAS ESTRICTAS DE OPERACIÓN (OBLIGATORIAS):
      Luego presenta el cuerpo completo redactado formalmente y el bloque de firma con marcadores si no se indicaron autoridades.`;
 
 const PRIMARY_GEMINI_MODEL = 'gemini-4-hydrogen';
-const FALLBACK_GEMINI_MODEL = 'gemini-3.8-flash';
+const FALLBACK_GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash-lite'] as const;
 
 const assistantChatLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -80,12 +80,24 @@ function getGeminiErrorStatus(err: unknown): number | undefined {
   if (err instanceof ApiError) {
     return err.status;
   }
-  if (!(err instanceof Error)) {
-    return undefined;
+  if (typeof err === 'object' && err !== null) {
+    if ('status' in err && typeof err.status === 'number') {
+      return err.status;
+    }
+    if (
+      'error' in err &&
+      typeof err.error === 'object' &&
+      err.error !== null &&
+      'code' in err.error &&
+      typeof err.error.code === 'number'
+    ) {
+      return err.error.code;
+    }
   }
 
+  const errorMessage = err instanceof Error ? err.message : String(err);
   try {
-    const parsed = JSON.parse(err.message) as { error?: { code?: unknown } };
+    const parsed = JSON.parse(errorMessage) as { error?: { code?: unknown } };
     return typeof parsed.error?.code === 'number' ? parsed.error.code : undefined;
   } catch {
     return undefined;
@@ -175,36 +187,55 @@ async function startServer() {
           return response.output_text;
         } catch (err: unknown) {
           const errorStatus = getGeminiErrorStatus(err);
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          console.error(
+            `[assistant/chat] ${model} Interactions API error (${errorStatus ?? 'unknown'}):`,
+            errorMessage,
+          );
           if (errorStatus === undefined || ![400, 404, 405].includes(errorStatus)) {
             throw err;
           }
 
           console.warn(
-            `[assistant/chat] Interactions API returned ${errorStatus}; retrying ${model} with generateContent.`,
+            `[assistant/chat] Retrying ${model} with generateContent after Interactions API returned ${errorStatus}.`,
           );
-          const fallbackResponse = await ai.models.generateContent({
-            model,
-            contents,
-            config: {
-              systemInstruction: SYSTEM_INSTRUCTION,
-            },
-          });
-          return fallbackResponse.text;
+          try {
+            const fallbackResponse = await ai.models.generateContent({
+              model,
+              contents,
+              config: {
+                systemInstruction: SYSTEM_INSTRUCTION,
+              },
+            });
+            return fallbackResponse.text;
+          } catch (fallbackError: unknown) {
+            const fallbackStatus = getGeminiErrorStatus(fallbackError);
+            const fallbackMessage =
+              fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+            console.error(
+              `[assistant/chat] ${model} generateContent error (${fallbackStatus ?? 'unknown'}):`,
+              fallbackMessage,
+            );
+            throw fallbackError;
+          }
         }
       };
 
       let generatedText: string | undefined;
-      try {
-        generatedText = await generateWithModel(PRIMARY_GEMINI_MODEL);
-      } catch (err: unknown) {
-        if (getGeminiErrorStatus(err) !== 503) {
-          throw err;
+      const models = [PRIMARY_GEMINI_MODEL, ...FALLBACK_GEMINI_MODELS];
+      for (let index = 0; index < models.length; index += 1) {
+        const model = models[index];
+        try {
+          generatedText = await generateWithModel(model);
+          break;
+        } catch (err: unknown) {
+          if (getGeminiErrorStatus(err) !== 503 || index === models.length - 1) {
+            throw err;
+          }
+          console.warn(
+            `[assistant/chat] ${model} is unavailable; trying ${models[index + 1]}.`,
+          );
         }
-
-        console.warn(
-          `[assistant/chat] ${PRIMARY_GEMINI_MODEL} is unavailable; retrying with ${FALLBACK_GEMINI_MODEL}.`,
-        );
-        generatedText = await generateWithModel(FALLBACK_GEMINI_MODEL);
       }
 
       const replyText = generatedText?.trim();
@@ -245,7 +276,7 @@ async function startServer() {
       }
 
       if (status !== undefined && status >= 500) {
-        console.error(`[assistant/chat] Gemini API ${status}:`, errorMessage);
+        console.error(`[assistant/chat] Gemini API error (${status}):`, errorMessage);
         res.status(503).json({
           error:
             'Los modelos de Gemini están temporalmente saturados. Espere unos instantes e intente nuevamente.',
