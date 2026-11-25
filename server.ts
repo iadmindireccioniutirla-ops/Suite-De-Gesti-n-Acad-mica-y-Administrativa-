@@ -76,6 +76,22 @@ function getGeminiClient(): GoogleGenAI {
   });
 }
 
+function getGeminiErrorStatus(err: unknown): number | undefined {
+  if (err instanceof ApiError) {
+    return err.status;
+  }
+  if (!(err instanceof Error)) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(err.message) as { error?: { code?: unknown } };
+    return typeof parsed.error?.code === 'number' ? parsed.error.code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function startServer() {
   const app = express();
   const port = Number(process.env.PORT) || 3000;
@@ -158,12 +174,13 @@ async function startServer() {
           });
           return response.output_text;
         } catch (err: unknown) {
-          if (!(err instanceof ApiError) || ![400, 404, 405].includes(err.status)) {
+          const errorStatus = getGeminiErrorStatus(err);
+          if (errorStatus === undefined || ![400, 404, 405].includes(errorStatus)) {
             throw err;
           }
 
           console.warn(
-            `[assistant/chat] Interactions API returned ${err.status}; retrying ${model} with generateContent.`,
+            `[assistant/chat] Interactions API returned ${errorStatus}; retrying ${model} with generateContent.`,
           );
           const fallbackResponse = await ai.models.generateContent({
             model,
@@ -180,7 +197,7 @@ async function startServer() {
       try {
         generatedText = await generateWithModel(PRIMARY_GEMINI_MODEL);
       } catch (err: unknown) {
-        if (!(err instanceof ApiError) || err.status !== 503) {
+        if (getGeminiErrorStatus(err) !== 503) {
           throw err;
         }
 
@@ -201,7 +218,7 @@ async function startServer() {
       res.json({ reply: replyText });
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      const status = err instanceof ApiError ? err.status : undefined;
+      const status = getGeminiErrorStatus(err);
 
       if (errorMessage === 'MISSING_GEMINI_API_KEY') {
         res.status(503).json({
