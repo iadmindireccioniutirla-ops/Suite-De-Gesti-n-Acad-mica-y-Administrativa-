@@ -5,7 +5,7 @@ import { rateLimit } from 'express-rate-limit';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { GoogleGenAI } from '@google/genai';
+import { ApiError, GoogleGenAI } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -124,32 +124,24 @@ async function startServer() {
 
       const ai = getGeminiClient();
 
-      const contents = [
-        ...sanitizedHistory.map((item) => ({
-          role: item.role,
-          parts: [{ text: item.text }],
-        })),
-        {
-          role: 'user' as const,
-          parts: [
-            {
-              text: workspaceContext
-                ? `Contexto operativo actual del sistema:\n${workspaceContext}\n\nSolicitud del usuario:\n${rawMessage}`
-                : rawMessage,
-            },
-          ],
-        },
-      ];
+      const conversationHistory = sanitizedHistory
+        .map((item) => `${item.role === 'user' ? 'Usuario' : 'Asistente'}: ${item.text}`)
+        .join('\n\n');
+      const currentRequest = workspaceContext
+        ? `Contexto operativo actual del sistema:\n${workspaceContext}\n\nSolicitud del usuario:\n${rawMessage}`
+        : rawMessage;
+      const input = conversationHistory
+        ? `${conversationHistory}\n\nUsuario: ${currentRequest}`
+        : currentRequest;
 
-      const response = await ai.models.generateContent({
+      const response = await ai.interactions.create({
         model: 'gemini-4-hydrogen',
-        contents,
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
-        },
+        input,
+        system_instruction: SYSTEM_INSTRUCTION,
+        store: false,
       });
 
-      const replyText = response.text?.trim();
+      const replyText = response.output_text?.trim();
       if (!replyText) {
         res.status(502).json({
           error: 'El servicio de Gemini no devolvió contenido textual en esta respuesta.',
@@ -160,6 +152,7 @@ async function startServer() {
       res.json({ reply: replyText });
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : String(err);
+      const status = err instanceof ApiError ? err.status : undefined;
 
       if (errorMessage === 'MISSING_GEMINI_API_KEY') {
         res.status(503).json({
@@ -169,7 +162,7 @@ async function startServer() {
         return;
       }
 
-      if (errorMessage.includes('API_KEY_INVALID') || errorMessage.includes('PERMISSION_DENIED') || errorMessage.includes('403')) {
+      if (status === 401 || status === 403) {
         res.status(403).json({
           error:
             'La clave de Gemini API fue rechazada o carece de permisos. Verifique su configuración en el panel Settings > Secrets.',
@@ -177,17 +170,27 @@ async function startServer() {
         return;
       }
 
-      if (errorMessage.includes('RESOURCE_EXHAUSTED') || errorMessage.includes('429')) {
+      if (status === 429) {
         res.status(429).json({
           error:
-            'Se alcanzó temporalmente el límite de solicitudes de Gemini API. Intente nuevamente en unos instantes.',
+            'Gemini alcanzó su cuota o límite temporal. Espere unos minutos e intente nuevamente; si persiste, revise la cuota y facturación del proyecto en Google AI Studio.',
+        });
+        return;
+      }
+
+      if (status !== undefined && status >= 500) {
+        console.error(`[assistant/chat] Gemini API ${status}:`, errorMessage);
+        res.status(503).json({
+          error:
+            'El servicio de Gemini está temporalmente indisponible. Espere unos instantes e intente nuevamente.',
         });
         return;
       }
 
       console.error('[assistant/chat] Error:', errorMessage);
-      res.status(500).json({
-        error: 'Ocurrió un error al comunicarse con el servicio de Gemini. Verifique la conexión e intente de nuevo.',
+      res.status(502).json({
+        error:
+          'Gemini no pudo procesar la solicitud. Verifique que el mensaje sea válido y vuelva a intentarlo.',
       });
     }
   });
