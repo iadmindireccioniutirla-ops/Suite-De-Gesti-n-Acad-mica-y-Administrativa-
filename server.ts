@@ -41,6 +41,7 @@ REGLAS ESTRICTAS DE OPERACIÓN (OBLIGATORIAS):
 const PRIMARY_GEMINI_MODEL = 'gemini-4-hydrogen';
 const FALLBACK_GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash-lite'] as const;
 const DEFAULT_GROQ_MODEL = 'llama-3.3-70b-versatile';
+const DEFAULT_CLOUDFLARE_MODEL = '@cf/meta/llama-3.1-8b-instruct';
 const AUTH_COOKIE_NAME = 'iutirla_session';
 const SESSION_DURATION_SECONDS = 12 * 60 * 60;
 
@@ -185,9 +186,9 @@ function getGeminiClient(): GoogleGenAI {
   });
 }
 
-function getAssistantProvider(): 'gemini' | 'groq' {
+function getAssistantProvider(): 'gemini' | 'groq' | 'cloudflare' {
   const provider = process.env.AI_PROVIDER?.trim().toLowerCase() || 'gemini';
-  if (provider !== 'gemini' && provider !== 'groq') {
+  if (provider !== 'gemini' && provider !== 'groq' && provider !== 'cloudflare') {
     throw new Error('INVALID_ASSISTANT_PROVIDER');
   }
   return provider;
@@ -253,6 +254,74 @@ async function generateWithGroq(
     return undefined;
   }
   return typeof message.content === 'string' ? message.content : undefined;
+}
+
+function getCloudflareCredentials(): { accountId: string; apiToken: string } {
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN?.trim();
+  if (!accountId) {
+    throw new Error('MISSING_CLOUDFLARE_ACCOUNT_ID');
+  }
+  if (!apiToken) {
+    throw new Error('MISSING_CLOUDFLARE_API_TOKEN');
+  }
+  return { accountId, apiToken };
+}
+
+async function generateWithCloudflare(
+  accountId: string,
+  apiToken: string,
+  history: ChatMessageInput[],
+  currentRequest: string,
+): Promise<string | undefined> {
+  const model = process.env.CLOUDFLARE_MODEL?.trim() || DEFAULT_CLOUDFLARE_MODEL;
+  const response = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run/${model}`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messages: [
+          { role: 'system', content: SYSTEM_INSTRUCTION },
+          ...history.map((item) => ({
+            role: item.role === 'user' ? 'user' : 'assistant',
+            content: item.text,
+          })),
+          { role: 'user', content: currentRequest },
+        ],
+        max_tokens: 1024,
+      }),
+    },
+  );
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw Object.assign(
+      new Error(`Cloudflare Workers AI returned an invalid response (${response.status}).`),
+      { status: response.status },
+    );
+  }
+
+  if (!response.ok) {
+    throw Object.assign(
+      new Error(`Cloudflare Workers AI request failed (${response.status}).`),
+      { status: response.status },
+    );
+  }
+
+  if (!payload || typeof payload !== 'object' || !('result' in payload)) {
+    throw new Error('Cloudflare Workers AI returned an unexpected response shape.');
+  }
+  const result = payload.result;
+  if (!result || typeof result !== 'object' || !('response' in result)) {
+    return undefined;
+  }
+  return typeof result.response === 'string' ? result.response : undefined;
 }
 
 function getGeminiErrorStatus(err: unknown): number | undefined {
@@ -406,7 +475,15 @@ async function startServer() {
 
       let generatedText: string | undefined;
       const provider = getAssistantProvider();
-      if (provider === 'groq') {
+      if (provider === 'cloudflare') {
+        const { accountId, apiToken } = getCloudflareCredentials();
+        generatedText = await generateWithCloudflare(
+          accountId,
+          apiToken,
+          sanitizedHistory,
+          currentRequest,
+        );
+      } else if (provider === 'groq') {
         generatedText = await generateWithGroq(
           getGroqApiKey(),
           sanitizedHistory,
@@ -499,7 +576,13 @@ async function startServer() {
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       const status = getGeminiErrorStatus(err);
-      const providerName = process.env.AI_PROVIDER?.trim().toLowerCase() === 'groq' ? 'Groq' : 'Gemini';
+      const configuredProvider = process.env.AI_PROVIDER?.trim().toLowerCase();
+      const providerName =
+        configuredProvider === 'groq'
+          ? 'Groq'
+          : configuredProvider === 'cloudflare'
+            ? 'Cloudflare Workers AI'
+            : 'Gemini';
 
       if (errorMessage === 'MISSING_GEMINI_API_KEY') {
         res.status(503).json({
@@ -516,9 +599,23 @@ async function startServer() {
         return;
       }
 
+      if (errorMessage === 'MISSING_CLOUDFLARE_ACCOUNT_ID') {
+        res.status(503).json({
+          error: 'No se ha configurado CLOUDFLARE_ACCOUNT_ID en el entorno del servidor.',
+        });
+        return;
+      }
+
+      if (errorMessage === 'MISSING_CLOUDFLARE_API_TOKEN') {
+        res.status(503).json({
+          error: 'No se ha configurado CLOUDFLARE_API_TOKEN en el entorno del servidor. Guarde el token como secreto en Render.',
+        });
+        return;
+      }
+
       if (errorMessage === 'INVALID_ASSISTANT_PROVIDER') {
         res.status(503).json({
-          error: 'AI_PROVIDER debe tener el valor "gemini" o "groq".',
+          error: 'AI_PROVIDER debe tener el valor "gemini", "groq" o "cloudflare".',
         });
         return;
       }

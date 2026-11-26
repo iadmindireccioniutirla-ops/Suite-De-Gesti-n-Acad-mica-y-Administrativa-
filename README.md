@@ -76,10 +76,13 @@ guardarse como secreto en Render, nunca en GitHub ni en variables `VITE_*`. No
 envíes al asistente nombres, cédulas, calificaciones, expedientes ni otros datos
 personales o confidenciales.
 El asistente usa Gemini por defecto (`AI_PROVIDER=gemini`) y también permite
-configurar Groq (`AI_PROVIDER=groq`). Para Groq, configura `GROQ_API_KEY` y,
-opcionalmente, `GROQ_MODEL`; el modelo predeterminado es
-`llama-3.3-70b-versatile`. Las cuotas y disponibilidad dependen del proveedor y
-de su plan. Las claves deben guardarse como secretos en el servidor.
+configurar Groq (`AI_PROVIDER=groq`) o Cloudflare Workers AI
+(`AI_PROVIDER=cloudflare`). Para Groq, configura `GROQ_API_KEY` y, opcionalmente,
+`GROQ_MODEL`; el modelo predeterminado es `llama-3.3-70b-versatile`. Para
+Cloudflare, configura `CLOUDFLARE_ACCOUNT_ID` y `CLOUDFLARE_API_TOKEN`; el modelo
+predeterminado es `@cf/meta/llama-3.1-8b-instruct`, y se puede cambiar con
+`CLOUDFLARE_MODEL`. Las cuotas y disponibilidad dependen del proveedor y de su
+plan. Las claves deben guardarse como secretos en el servidor.
 
 Con Gemini, el asistente usa primero la Interactions API oficial de Google GenAI
 con `store=false`, recurre a `generateContent` si el proyecto o modelo no admite
@@ -99,10 +102,11 @@ antes de emitir comunicaciones oficiales.
 
 ## Configuración del asistente
 
-Configura `AI_PROVIDER` como `gemini` o `groq` en el entorno del servidor y
-agrega la clave correspondiente (`GEMINI_API_KEY` o `GROQ_API_KEY`). No incluyas
-claves en el código fuente ni en variables `VITE_*`, que pueden quedar expuestas
-en el navegador.
+Configura `AI_PROVIDER` como `gemini`, `groq` o `cloudflare` en el entorno del
+servidor y agrega las credenciales correspondientes. Para Cloudflare, el Account
+ID y el API Token se configuran como `CLOUDFLARE_ACCOUNT_ID` y
+`CLOUDFLARE_API_TOKEN`. No incluyas credenciales en el código fuente ni en
+variables `VITE_*`, que pueden quedar expuestas en el navegador.
 
 ## Inicio de sesión institucional
 
