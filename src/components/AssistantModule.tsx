@@ -372,7 +372,7 @@ export function AssistantModule({
           role: 'model',
           text:
             data.error ||
-            'No fue posible obtener respuesta del servicio Gemini en este momento.',
+            'No fue posible obtener respuesta del proveedor de IA en este momento.',
           timestamp: nowLabel,
           error: true,
         };
@@ -427,7 +427,7 @@ export function AssistantModule({
             Protocolo ia-admin-direccion-iutirla · Cero Alucinaciones
           </p>
           <h2 className="text-2xl font-bold tracking-tight text-slate-900">
-            Asistente IA de Dirección (Gemini)
+            Asistente IA de Dirección
           </h2>
           <p className="text-sm text-slate-600 max-w-2xl">
             Redacción institucional asistida, planificación de carga y orientación normativa con
@@ -452,7 +452,7 @@ export function AssistantModule({
         <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
         <p>
           No incluya nombres, cédulas, calificaciones, expedientes ni otros datos personales o
-          confidenciales. Las consultas se envían a Google Gemini para generar respuestas.
+          confidenciales. Las consultas se envían al proveedor de IA configurado por la institución.
         </p>
       </div>
 

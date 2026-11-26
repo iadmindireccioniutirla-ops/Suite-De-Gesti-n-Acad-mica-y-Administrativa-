@@ -40,6 +40,7 @@ REGLAS ESTRICTAS DE OPERACIÓN (OBLIGATORIAS):
 
 const PRIMARY_GEMINI_MODEL = 'gemini-4-hydrogen';
 const FALLBACK_GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash-lite'] as const;
+const DEFAULT_GROQ_MODEL = 'llama-3.3-70b-versatile';
 const AUTH_COOKIE_NAME = 'iutirla_session';
 const SESSION_DURATION_SECONDS = 12 * 60 * 60;
 
@@ -184,6 +185,76 @@ function getGeminiClient(): GoogleGenAI {
   });
 }
 
+function getAssistantProvider(): 'gemini' | 'groq' {
+  const provider = process.env.AI_PROVIDER?.trim().toLowerCase() || 'gemini';
+  if (provider !== 'gemini' && provider !== 'groq') {
+    throw new Error('INVALID_ASSISTANT_PROVIDER');
+  }
+  return provider;
+}
+
+function getGroqApiKey(): string {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey || !apiKey.trim()) {
+    throw new Error('MISSING_GROQ_API_KEY');
+  }
+  return apiKey.trim();
+}
+
+async function generateWithGroq(
+  apiKey: string,
+  history: ChatMessageInput[],
+  currentRequest: string,
+): Promise<string | undefined> {
+  const model = process.env.GROQ_MODEL?.trim() || DEFAULT_GROQ_MODEL;
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: SYSTEM_INSTRUCTION },
+        ...history.map((item) => ({
+          role: item.role === 'user' ? 'user' : 'assistant',
+          content: item.text,
+        })),
+        { role: 'user', content: currentRequest },
+      ],
+    }),
+  });
+
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw Object.assign(new Error(`Groq returned an invalid response (${response.status}).`), {
+      status: response.status,
+    });
+  }
+
+  if (!response.ok) {
+    throw Object.assign(new Error(`Groq API request failed (${response.status}).`), {
+      status: response.status,
+    });
+  }
+
+  if (!payload || typeof payload !== 'object' || !('choices' in payload)) {
+    throw new Error('Groq returned an unexpected response shape.');
+  }
+  const choices = payload.choices;
+  if (!Array.isArray(choices) || !choices[0] || typeof choices[0] !== 'object') {
+    return undefined;
+  }
+  const message = choices[0].message;
+  if (!message || typeof message !== 'object' || !('content' in message)) {
+    return undefined;
+  }
+  return typeof message.content === 'string' ? message.content : undefined;
+}
+
 function getGeminiErrorStatus(err: unknown): number | undefined {
   if (err instanceof ApiError) {
     return err.status;
@@ -323,8 +394,6 @@ async function startServer() {
           ? body.workspaceContext.trim().slice(0, 2000)
           : '';
 
-      const ai = getGeminiClient();
-
       const conversationHistory = sanitizedHistory
         .map((item) => `${item.role === 'user' ? 'Usuario' : 'Asistente'}: ${item.text}`)
         .join('\n\n');
@@ -335,83 +404,93 @@ async function startServer() {
         ? `${conversationHistory}\n\nUsuario: ${currentRequest}`
         : currentRequest;
 
-      const contents = [
-        ...sanitizedHistory.map((item) => ({
-          role: item.role,
-          parts: [{ text: item.text }],
-        })),
-        {
-          role: 'user' as const,
-          parts: [{ text: currentRequest }],
-        },
-      ];
-
-      const generateWithModel = async (model: string): Promise<string | undefined> => {
-        try {
-          const response = await ai.interactions.create({
-            model,
-            input,
-            system_instruction: SYSTEM_INSTRUCTION,
-            store: false,
-          });
-          return response.output_text;
-        } catch (err: unknown) {
-          const errorStatus = getGeminiErrorStatus(err);
-          const errorMessage = err instanceof Error ? err.message : String(err);
-          console.error(
-            `[assistant/chat] ${model} Interactions API error (${errorStatus ?? 'unknown'}):`,
-            errorMessage,
-          );
-          if (errorStatus === undefined || ![400, 404, 405].includes(errorStatus)) {
-            throw err;
-          }
-
-          console.warn(
-            `[assistant/chat] Retrying ${model} with generateContent after Interactions API returned ${errorStatus}.`,
-          );
-          try {
-            const fallbackResponse = await ai.models.generateContent({
-              model,
-              contents,
-              config: {
-                systemInstruction: SYSTEM_INSTRUCTION,
-              },
-            });
-            return fallbackResponse.text;
-          } catch (fallbackError: unknown) {
-            const fallbackStatus = getGeminiErrorStatus(fallbackError);
-            const fallbackMessage =
-              fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
-            console.error(
-              `[assistant/chat] ${model} generateContent error (${fallbackStatus ?? 'unknown'}):`,
-              fallbackMessage,
-            );
-            throw fallbackError;
-          }
-        }
-      };
-
       let generatedText: string | undefined;
-      const models = [PRIMARY_GEMINI_MODEL, ...FALLBACK_GEMINI_MODELS];
-      for (let index = 0; index < models.length; index += 1) {
-        const model = models[index];
-        try {
-          generatedText = await generateWithModel(model);
-          break;
-        } catch (err: unknown) {
-          if (getGeminiErrorStatus(err) !== 503 || index === models.length - 1) {
-            throw err;
+      const provider = getAssistantProvider();
+      if (provider === 'groq') {
+        generatedText = await generateWithGroq(
+          getGroqApiKey(),
+          sanitizedHistory,
+          currentRequest,
+        );
+      } else {
+        const ai = getGeminiClient();
+        const contents = [
+          ...sanitizedHistory.map((item) => ({
+            role: item.role,
+            parts: [{ text: item.text }],
+          })),
+          {
+            role: 'user' as const,
+            parts: [{ text: currentRequest }],
+          },
+        ];
+
+        const generateWithModel = async (model: string): Promise<string | undefined> => {
+          try {
+            const response = await ai.interactions.create({
+              model,
+              input,
+              system_instruction: SYSTEM_INSTRUCTION,
+              store: false,
+            });
+            return response.output_text;
+          } catch (err: unknown) {
+            const errorStatus = getGeminiErrorStatus(err);
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            console.error(
+              `[assistant/chat] ${model} Interactions API error (${errorStatus ?? 'unknown'}):`,
+              errorMessage,
+            );
+            if (errorStatus === undefined || ![400, 404, 405].includes(errorStatus)) {
+              throw err;
+            }
+
+            console.warn(
+              `[assistant/chat] Retrying ${model} with generateContent after Interactions API returned ${errorStatus}.`,
+            );
+            try {
+              const fallbackResponse = await ai.models.generateContent({
+                model,
+                contents,
+                config: {
+                  systemInstruction: SYSTEM_INSTRUCTION,
+                },
+              });
+              return fallbackResponse.text;
+            } catch (fallbackError: unknown) {
+              const fallbackStatus = getGeminiErrorStatus(fallbackError);
+              const fallbackMessage =
+                fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+              console.error(
+                `[assistant/chat] ${model} generateContent error (${fallbackStatus ?? 'unknown'}):`,
+                fallbackMessage,
+              );
+              throw fallbackError;
+            }
           }
-          console.warn(
-            `[assistant/chat] ${model} is unavailable; trying ${models[index + 1]}.`,
-          );
+        };
+
+        const models = [PRIMARY_GEMINI_MODEL, ...FALLBACK_GEMINI_MODELS];
+        for (let index = 0; index < models.length; index += 1) {
+          const model = models[index];
+          try {
+            generatedText = await generateWithModel(model);
+            break;
+          } catch (err: unknown) {
+            if (getGeminiErrorStatus(err) !== 503 || index === models.length - 1) {
+              throw err;
+            }
+            console.warn(
+              `[assistant/chat] ${model} is unavailable; trying ${models[index + 1]}.`,
+            );
+          }
         }
       }
 
       const replyText = generatedText?.trim();
       if (!replyText) {
         res.status(502).json({
-          error: 'El servicio de Gemini no devolvió contenido textual en esta respuesta.',
+          error: 'El proveedor de IA no devolvió contenido textual en esta respuesta.',
         });
         return;
       }
@@ -420,44 +499,55 @@ async function startServer() {
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       const status = getGeminiErrorStatus(err);
+      const providerName = process.env.AI_PROVIDER?.trim().toLowerCase() === 'groq' ? 'Groq' : 'Gemini';
 
       if (errorMessage === 'MISSING_GEMINI_API_KEY') {
         res.status(503).json({
           error:
-            'No se ha configurado GEMINI_API_KEY en el entorno del servidor. Configure la clave en el panel Settings > Secrets para habilitar el Asistente IA.',
+            'No se ha configurado GEMINI_API_KEY en el entorno del servidor. Guarde la clave como secreto en Render para habilitar el Asistente IA.',
+        });
+        return;
+      }
+
+      if (errorMessage === 'MISSING_GROQ_API_KEY') {
+        res.status(503).json({
+          error: 'No se ha configurado GROQ_API_KEY en el entorno del servidor. Guarde la clave como secreto en Render.',
+        });
+        return;
+      }
+
+      if (errorMessage === 'INVALID_ASSISTANT_PROVIDER') {
+        res.status(503).json({
+          error: 'AI_PROVIDER debe tener el valor "gemini" o "groq".',
         });
         return;
       }
 
       if (status === 401 || status === 403) {
         res.status(403).json({
-          error:
-            'La clave de Gemini API fue rechazada o carece de permisos. Verifique su configuración en el panel Settings > Secrets.',
+          error: `La clave de ${providerName} fue rechazada o carece de permisos. Verifique su configuración en Render.`,
         });
         return;
       }
 
       if (status === 429) {
         res.status(429).json({
-          error:
-            'Gemini alcanzó su cuota o límite temporal. Espere unos minutos e intente nuevamente; si persiste, revise la cuota y facturación del proyecto en Google AI Studio.',
+          error: `${providerName} alcanzó su cuota o límite temporal. Espere e intente nuevamente o revise la cuota del proveedor.`,
         });
         return;
       }
 
       if (status !== undefined && status >= 500) {
-        console.error(`[assistant/chat] Gemini API error (${status}):`, errorMessage);
+        console.error(`[assistant/chat] ${providerName} API error (${status}):`, errorMessage);
         res.status(503).json({
-          error:
-            'Los modelos de Gemini están temporalmente saturados. Espere unos instantes e intente nuevamente.',
+          error: `El servicio de ${providerName} está temporalmente indisponible. Intente nuevamente en unos instantes.`,
         });
         return;
       }
 
       console.error('[assistant/chat] Error:', errorMessage);
       res.status(502).json({
-        error:
-          'Gemini no pudo procesar la solicitud. Verifique que el mensaje sea válido y vuelva a intentarlo.',
+        error: `${providerName} no pudo procesar la solicitud. Verifique el mensaje y la configuración del proveedor.`,
       });
     }
   });
