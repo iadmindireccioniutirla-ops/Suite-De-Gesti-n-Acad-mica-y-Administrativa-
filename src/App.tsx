@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   CalendarDays,
+  ClipboardList,
   Clock,
   FileText,
   LayoutDashboard,
@@ -14,6 +15,7 @@ import { AssistantModule } from './components/AssistantModule';
 import { BulletinProceduresModule } from './components/BulletinProceduresModule';
 import { DashboardModule } from './components/DashboardModule';
 import { DocumentsModule } from './components/DocumentsModule';
+import { ControlStudiesModule } from './components/ControlStudiesModule';
 import { InstitutionalLogo } from './components/InstitutionalMedia';
 import { LoginScreen } from './components/LoginScreen';
 import { SchedulesModule } from './components/SchedulesModule';
@@ -75,6 +77,7 @@ const NAV_ITEMS: Array<{
   { id: 'documents', label: 'Documentos Oficiales', icon: FileText },
   { id: 'schedules', label: 'Horarios y Carga', icon: Clock },
   { id: 'bulletin', label: 'Cartelera y Trámites', icon: CalendarDays },
+  { id: 'control-studies', label: 'Control de Estudios', icon: ClipboardList },
   { id: 'assistant', label: 'Asistente IA', icon: Sparkles },
 ];
 
@@ -540,6 +543,10 @@ Los interesados deberán consignar su expediente completo ante las oficinas corr
               onDeleteNotice={handleDeleteNotice}
               onCreateDocumentFromProcedure={handleCreateDocFromProcedure}
             />
+          )}
+
+          {activeModule === 'control-studies' && (
+            <ControlStudiesModule onNavigate={handleNavigate} />
           )}
 
           {activeModule === 'assistant' && (

@@ -3,6 +3,7 @@ export type ModuleId =
   | 'documents'
   | 'schedules'
   | 'bulletin'
+  | 'control-studies'
   | 'assistant';
 
 export type Specialty =
